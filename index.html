@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sudan Registry – Accept admin role</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:24px auto;padding:0 16px;color:#111}
+button{width:100%;font-size:22px;padding:18px;border:0;border-radius:14px;background:#0a7d3b;color:#fff;font-weight:700}
+button:disabled{background:#999}
+#log{margin-top:18px;font-size:15px;line-height:1.5;white-space:pre-wrap;word-break:break-all}
+.ok{color:#0a7d3b}.bad{color:#b00020}.small{font-size:13px;color:#555}
+a{color:#0645ad}
+</style></head><body>
+<h2>Sudan Registry v2 – Accept admin role</h2>
+<p class="small">Contract: 0x3EDcA83149b3ce06C9859F914578fba9BD293a22 (Polygon)<br>
+Wallet that must be selected: 0x5287eAc1581F4CFa072D093250b404d92117E801<br>
+This page only asks MetaMask to send one transaction: amount 0 POL, data 0x79ba5097 (acceptOwnership). Nothing else. No data is stored.</p>
+<button id="go">Accept admin role</button>
+<div id="log"></div>
+<script>
+const V2='0x3EDcA83149b3ce06C9859F914578fba9BD293a22';
+const ME='0x5287eac1581f4cfa072d093250b404d92117e801';
+const RPC='https://polygon-bor-rpc.publicnode.com';
+const logEl=document.getElementById('log'), btn=document.getElementById('go');
+function log(m,c){const d=document.createElement('div');if(c)d.className=c;d.innerHTML=m;logEl.appendChild(d)}
+async function rpc(method,params=[]){const r=await fetch(RPC,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});const j=await r.json();if(j.error)throw new Error(j.error.message);return j.result}
+const addr=h=>'0x'+h.slice(-40).toLowerCase();
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function addPolygonRpc(){
+  await ethereum.request({method:'wallet_addEthereumChain',params:[{chainId:'0x89',chainName:'Polygon Mainnet',nativeCurrency:{name:'POL',symbol:'POL',decimals:18},rpcUrls:[RPC],blockExplorerUrls:['https://polygonscan.com']}]});
+}
+btn.onclick=async()=>{
+ btn.disabled=true;logEl.innerHTML='';
+ try{
+  if(!window.ethereum){log('Open this page inside the MetaMask app: MetaMask → Browser tab (bottom) → paste this link.','bad');btn.disabled=false;return}
+  const accts=await ethereum.request({method:'eth_requestAccounts'});
+  const from=(accts[0]||'').toLowerCase();
+  if(from!==ME){log('Connected wallet is '+from+'.<br>Please switch MetaMask to your “Sudan” account (0x5287…E801), then tap the button again.','bad');btn.disabled=false;return}
+  log('✓ Wallet 0x5287…E801 connected','ok');
+  try{await ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:'0x89'}]})}
+  catch(e){if(e.code===4902||/Unrecognized|not added/i.test(e.message||'')){await addPolygonRpc()}else throw e}
+  if((await ethereum.request({method:'eth_chainId'}))!=='0x89'){log('MetaMask is not on Polygon. Approve the network switch and tap again.','bad');btn.disabled=false;return}
+  log('✓ Network: Polygon','ok');
+  // Is MetaMask's own Polygon connection working? (A dead RPC = "network fee unavailable")
+  let walletRpcOk=true;try{await ethereum.request({method:'eth_blockNumber'})}catch(e){walletRpcOk=false}
+  if(!walletRpcOk){
+    log('MetaMask’s Polygon connection (RPC) is not responding — this is why the fee says “Unavailable”. Asking MetaMask to add a working one…','bad');
+    try{await addPolygonRpc()}catch(e){}
+    try{await ethereum.request({method:'eth_blockNumber'});walletRpcOk=true;log('✓ Polygon connection works now','ok')}catch(e){}
+    if(!walletRpcOk){log('Please fix it by hand: MetaMask → Settings → Networks → Polygon → RPC URL → set it to<br><b>'+RPC+'</b><br>Save, come back here and tap the button again.','bad');btn.disabled=false;return}
+  }else log('✓ MetaMask’s Polygon connection works','ok');
+  const pend=addr(await rpc('eth_call',[{to:V2,data:'0xe30c3978'},'latest']));
+  const own=addr(await rpc('eth_call',[{to:V2,data:'0x8da5cb5b'},'latest']));
+  if(own===ME){log('✓ You are already the admin. Nothing to do.','ok');return}
+  if(pend!==ME){log('This wallet is not the pending admin on the contract (pending: '+pend+'). Stop and tell Ahmed.','bad');return}
+  const bal=BigInt(await rpc('eth_getBalance',[ME,'latest']));
+  log('✓ You are the pending admin. Balance: '+(Number(bal)/1e18).toFixed(4)+' POL','ok');
+  const blk=await rpc('eth_getBlockByNumber',['latest',false]);
+  const base=BigInt(blk.baseFeePerGas);let tip=BigInt(await rpc('eth_maxPriorityFeePerGas'));
+  const minTip=30000000000n;if(tip<minTip)tip=minTip;
+  const maxFee=base*2n+tip;const gas=60000n;
+  log('Max network fee: about '+(Number(gas*maxFee)/1e18).toFixed(4)+' POL (usually much less). Now confirm in MetaMask…');
+  const hash=await ethereum.request({method:'eth_sendTransaction',params:[{from:accts[0],to:V2,value:'0x0',data:'0x79ba5097',gas:'0x'+gas.toString(16),maxFeePerGas:'0x'+maxFee.toString(16),maxPriorityFeePerGas:'0x'+tip.toString(16)}]});
+  log('Sent ✓ Transaction: <a href="https://polygonscan.com/tx/'+hash+'" target="_blank">'+hash+'</a><br>Waiting for Polygon…');
+  for(let i=0;i<60;i++){await sleep(3000);let r=null;try{r=await rpc('eth_getTransactionReceipt',[hash])}catch(e){}
+    if(r){if(r.status==='0x1'){const o=addr(await rpc('eth_call',[{to:V2,data:'0x8da5cb5b'},'latest']));log(o===ME?'🎉 Done. You are now the admin of Sudan Registry v2.':'Mined, but admin is '+o+' — tell Ahmed.',o===ME?'ok':'bad')}else log('The transaction failed on chain. Tell Ahmed and send him the link above.','bad');return}}
+  log('Still pending. Keep the link above and check it on Polygonscan in a minute.');
+ }catch(e){log('Stopped: '+(e&&e.message?e.message:e)+(e&&e.code===4001?' (you tapped Reject — tap the button again when ready)':''),'bad');btn.disabled=false}
+};
+</script></body></html>
